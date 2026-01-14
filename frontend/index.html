@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CV Formatter - Professional Resume Formatting</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>CV Formatter</h1>
+            <p class="subtitle">Transform your resume into a professionally formatted document</p>
+        </header>
+
+        <main>
+            <form id="resumeForm" class="form-card">
+                <!-- API Key Input -->
+                <div class="form-group">
+                    <label for="apiKey">OpenAI API Key</label>
+                    <input 
+                        type="password" 
+                        id="apiKey" 
+                        name="apiKey" 
+                        placeholder="sk-..." 
+                        required
+                        autocomplete="off"
+                    >
+                    <div class="api-key-options">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="rememberApiKey" checked>
+                            <span>Remember API key (stored locally in browser)</span>
+                        </label>
+                        <button type="button" id="clearApiKey" class="clear-btn" style="display: none;">
+                            Clear saved key
+                        </button>
+                    </div>
+                    <small class="help-text">Your API key is stored locally in your browser only, never sent to our servers</small>
+                </div>
+
+                <!-- PDF Upload -->
+                <div class="form-group">
+                    <label for="pdfFile">Upload PDF Resume</label>
+                    <div class="file-upload-area" id="fileUploadArea">
+                        <input 
+                            type="file" 
+                            id="pdfFile" 
+                            name="pdfFile" 
+                            accept=".pdf" 
+                            required
+                            style="display: none;"
+                        >
+                        <div class="file-upload-content">
+                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            <p class="upload-text">Click to upload or drag and drop</p>
+                            <p class="upload-subtext">PDF files only (max 10MB)</p>
+                            <p class="file-name" id="fileName" style="display: none;"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Auto-download Toggle -->
+                <div class="form-group checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="autoDownload" checked>
+                        <span>Auto-download formatted resume</span>
+                    </label>
+                </div>
+
+                <!-- Submit Button -->
+                <button type="submit" id="submitBtn" class="submit-btn">
+                    <span class="btn-text">Format Resume</span>
+                    <span class="btn-loader" id="btnLoader" style="display: none;">
+                        <span class="spinner"></span>
+                        Processing...
+                    </span>
+                </button>
+
+                <!-- Error Message -->
+                <div id="errorMessage" class="error-message" style="display: none;"></div>
+
+                <!-- Success Message -->
+                <div id="successMessage" class="success-message" style="display: none;">
+                    <p>Resume formatted successfully!</p>
+                    <button id="downloadBtn" class="download-btn" style="display: none;">
+                        Download Formatted Resume
+                    </button>
+                </div>
+            </form>
+        </main>
+
+        <footer>
+            <p>Powered by OpenAI GPT-4o-mini</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
