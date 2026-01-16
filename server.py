@@ -20,7 +20,7 @@ You are a professional resume parser. Your goal is to extract information from a
 1. PERSONAL INFO: Extract 'first_name' and 'last_name'.
 2. EDUCATION: Create a list of objects. Split the university name from the degree. Graduation year should be just the year (e.g., 2017). For each education entry, include 'extra_bullets' as a list of strings for honors, activities, awards, or any additional information (can be null or empty list if none).
 3. JOB DATES: For every job, split the date range (e.g., 'Jul 2021 – Present') into 'job_start' (Jul 2021) and 'job_end' (Present). If there is only one date, put it in 'job_start' and leave 'job_end' as null.
-4. JOB DESCRIPTION: Extract standard responsibilities as a list of strings.
+4. JOB DESCRIPTION: Extract standard responsibilities as a list of strings. CRITICAL: Each bullet point must be preserved as a COMPLETE, SINGLE string in the list. Do NOT split bullet points that contain commas - commas within bullet points are part of the content and should be preserved. For example, "Managed team of 5 analysts, including hiring and training" should be ONE complete string, not split at the comma.
 5. TRANSACTIONS: Look for a section often titled 'Select Transaction Experience' or bullet points describing specific deals/dollar amounts. Move these into a 'transactions' list of objects. Each object must have a 'deal_description'.
 6. ADDITIONAL: Group all Skills, Software, Certifications, Languages, and Interests into a single list of strings called 'additional_bullets'.
 
@@ -75,7 +75,7 @@ Example output:
       "job_start": "Jul 2021",
       "job_end": "Present",
       "job_title": "Director",
-      "job_description": ["Sourced $500mm in debt investments", "Managed junior associates"],
+      "job_description": ["Sourced $500mm in debt investments", "Managed team of 5 junior associates, including hiring and performance reviews", "Led cross-functional initiatives across sales, operations, and finance"],
       "transactions": [
         { "deal_description": "NYC Office Workout: $50mm senior loan." }
       ]
@@ -85,6 +85,9 @@ Example output:
 }  
 
 ### CRITICAL INSTRUCTIONS:
+- BULLET POINT PRESERVATION: When extracting bullet points (for job_description, extra_bullets, transactions, or additional_bullets), each bullet point must be kept as a COMPLETE, SINGLE string. Do NOT split bullet points at commas, semicolons, or other punctuation - these are part of the content. Each array element should represent ONE complete bullet point from the source document.
+- COMMA HANDLING: Commas within bullet points are part of the content and MUST be preserved. For example, "Led cross-functional team of 10, including engineers and designers" is ONE bullet point, not two separate ones. Only split at actual bullet point markers (•, -, *, etc.) or line breaks that clearly indicate a new bullet point.
+- BULLET POINT GROUPING: Keep related bullet points together. If multiple bullet points describe the same job or education entry, include ALL of them in the respective list. Do not omit or truncate bullet points to be concise - preserve the complete information.
 - If extra_bullets or relevant_courses are not found, return null (or empty list [] for extra_bullets).
 - extra_bullets should be a list of strings (like job_description) - can contain honors, activities, awards, etc. If none exist, use null or empty list [].
 - If a job has no transactions, return an empty list [].
@@ -95,10 +98,62 @@ Example output:
 
 
 def extract_text_from_pdf_bytes(pdf_bytes):
-    """Extract text from PDF bytes (in-memory)"""
+    """Extract text from PDF bytes (in-memory) with improved bullet point preservation"""
     pdf_stream = io.BytesIO(pdf_bytes)
     with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
-        return "".join([page.get_text() for page in doc])
+        pages_text = []
+        for page in doc:
+            # Use get_text with layout preservation to maintain structure
+            text = page.get_text("text", sort=True)
+            
+            # Post-process to better preserve bullet points
+            # Common bullet point markers (including filled circle ●)
+            bullet_markers = ['•', '▪', '▫', '◦', '‣', '-', '*', '·', '●']
+            
+            lines = text.split('\n')
+            processed_lines = []
+            
+            for i, line in enumerate(lines):
+                original_line = line
+                # Remove zero-width spaces and other invisible characters that might interfere
+                line_cleaned = line.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '')
+                line_stripped = line_cleaned.strip()
+                
+                if not line_stripped:
+                    processed_lines.append('')
+                    continue
+                
+                # Check if line starts with a bullet marker (check original for leading whitespace)
+                is_bullet = any(line_stripped.startswith(marker) for marker in bullet_markers)
+                
+                # Also check for indented lines that might be continuation of bullets
+                # (common pattern: bullet on first line, continuation on next)
+                is_continuation = False
+                if i > 0 and processed_lines:
+                    prev_line_stripped = processed_lines[-1].strip()
+                    # If previous line was a bullet and this line is indented or starts lowercase
+                    if any(prev_line_stripped.startswith(marker) for marker in bullet_markers):
+                        # Check if this looks like a continuation (starts with lowercase or is indented)
+                        # Check original line for indentation before stripping
+                        is_indented = original_line.startswith('  ') or original_line.startswith('\t')
+                        if line_stripped and (line_stripped[0].islower() or is_indented):
+                            is_continuation = True
+                
+                if is_bullet:
+                    # Ensure bullet point is on its own line (use stripped version)
+                    processed_lines.append(line_stripped)
+                elif is_continuation:
+                    # Append continuation to previous bullet point
+                    if processed_lines:
+                        processed_lines[-1] += " " + line_stripped
+                    else:
+                        processed_lines.append(line_stripped)
+                else:
+                    processed_lines.append(line_stripped)
+            
+            pages_text.append('\n'.join(processed_lines))
+        
+        return '\n\n'.join(pages_text)
 
 
 def get_structured_data(api_key, raw_text):
