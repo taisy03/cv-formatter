@@ -13,11 +13,15 @@ const downloadBtn = document.getElementById('downloadBtn');
 const autoDownloadCheckbox = document.getElementById('autoDownload');
 const rememberApiKeyCheckbox = document.getElementById('rememberApiKey');
 const clearApiKeyBtn = document.getElementById('clearApiKey');
+const logoutBtn = document.getElementById('logoutBtn');
 
 // API Key Storage
 const API_KEY_STORAGE_KEY = 'cv_formatter_api_key';
 
-// Load saved API key on page load
+// ============================================
+// API Key Management
+// ============================================
+
 function loadSavedApiKey() {
     try {
         const savedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
@@ -34,7 +38,6 @@ function loadSavedApiKey() {
     }
 }
 
-// Save API key to localStorage
 function saveApiKey(key) {
     try {
         if (rememberApiKeyCheckbox.checked && key && key.length > 0) {
@@ -51,7 +54,6 @@ function saveApiKey(key) {
     }
 }
 
-// Clear saved API key
 function clearSavedApiKey() {
     try {
         localStorage.removeItem(API_KEY_STORAGE_KEY);
@@ -63,8 +65,29 @@ function clearSavedApiKey() {
     }
 }
 
-// Load API key on page load
-loadSavedApiKey();
+// ============================================
+// Authentication
+// ============================================
+
+async function handleLogout() {
+    try {
+        await fetch('/api/auth/logout', {
+            method: 'POST',
+            credentials: 'include'
+        });
+    } catch (error) {
+        console.error('Logout error:', error);
+    }
+    // Redirect to login page
+    window.location.href = '/login';
+}
+
+// ============================================
+// Event Listeners
+// ============================================
+
+// Logout button
+logoutBtn.addEventListener('click', handleLogout);
 
 // Handle remember checkbox change
 rememberApiKeyCheckbox.addEventListener('change', () => {
@@ -89,7 +112,7 @@ apiKeyInput.addEventListener('input', () => {
         if (rememberApiKeyCheckbox.checked) {
             saveApiKey(apiKeyInput.value.trim());
         }
-    }, 500); // Save after 500ms of no typing
+    }, 500);
 });
 
 // File handling
@@ -182,8 +205,15 @@ form.addEventListener('submit', async (e) => {
         // Make API request
         const response = await fetch('/api/process', {
             method: 'POST',
+            credentials: 'include',
             body: formData
         });
+        
+        // Handle authentication errors - redirect to login
+        if (response.status === 401) {
+            window.location.href = '/login';
+            return;
+        }
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: 'Unknown error occurred' }));
@@ -240,6 +270,10 @@ form.addEventListener('submit', async (e) => {
     }
 });
 
+// ============================================
+// UI Helper Functions
+// ============================================
+
 function setLoadingState(loading) {
     if (loading) {
         submitBtn.disabled = true;
@@ -275,3 +309,9 @@ function hideMessages() {
     downloadBtn.style.display = 'none';
 }
 
+// ============================================
+// Initialize
+// ============================================
+
+// Load saved API key on page load
+loadSavedApiKey();

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CV Formatter - Login</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="login-container">
+        <header>
+            <h1>CV <span>Formatter</span></h1>
+            <p class="subtitle">Professional Resume Formatting</p>
+        </header>
+
+        <main>
+            <form id="loginForm" class="form-card">
+                <div style="text-align: center;">
+                    <svg class="lock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                </div>
+
+                <div class="form-group">
+                    <label for="loginPassword">Password</label>
+                    <input 
+                        type="password" 
+                        id="loginPassword" 
+                        name="password" 
+                        placeholder="Enter password"
+                        required
+                        autocomplete="current-password"
+                    >
+                </div>
+
+                <button type="submit" class="login-btn">
+                    <span class="btn-text">Sign In</span>
+                </button>
+
+                <div id="loginError" class="error-message" style="display: none;"></div>
+            </form>
+        </main>
+
+        <footer>
+            <p>Powered by <span>OpenAI GPT-4o-mini</span></p>
+        </footer>
+    </div>
+
+    <script>
+        const loginForm = document.getElementById('loginForm');
+        const loginPasswordInput = document.getElementById('loginPassword');
+        const loginError = document.getElementById('loginError');
+
+        // Check if already authenticated
+        fetch('/api/auth/check', { credentials: 'include' })
+            .then(response => {
+                if (response.ok) {
+                    window.location.href = '/';
+                }
+            })
+            .catch(() => {});
+
+        let isLocked = false;
+        let lockoutTimer = null;
+
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (isLocked) {
+                return;
+            }
+            
+            const password = loginPasswordInput.value;
+            
+            if (!password) {
+                showError('Please enter a password');
+                return;
+            }
+            
+            // Disable button while processing
+            const submitBtn = loginForm.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Signing in...';
+            
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    window.location.href = '/';
+                } else if (response.status === 429) {
+                    // Rate limited / locked out
+                    startLockoutCountdown(data.remaining_seconds || 900);
+                    showError(data.error);
+                } else {
+                    showError(data.error || 'Invalid password');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Sign In';
+                }
+            } catch (error) {
+                console.error('Login failed:', error);
+                showError('Login failed. Please try again.');
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Sign In';
+            }
+        });
+
+        function startLockoutCountdown(seconds) {
+            isLocked = true;
+            const submitBtn = loginForm.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            loginPasswordInput.disabled = true;
+            
+            if (lockoutTimer) {
+                clearInterval(lockoutTimer);
+            }
+            
+            let remaining = seconds;
+            updateLockoutDisplay(remaining);
+            
+            lockoutTimer = setInterval(() => {
+                remaining--;
+                if (remaining <= 0) {
+                    clearInterval(lockoutTimer);
+                    isLocked = false;
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Sign In';
+                    loginPasswordInput.disabled = false;
+                    hideError();
+                } else {
+                    updateLockoutDisplay(remaining);
+                }
+            }, 1000);
+        }
+
+        function updateLockoutDisplay(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            const submitBtn = loginForm.querySelector('button[type="submit"]');
+            submitBtn.textContent = `Locked (${minutes}:${secs.toString().padStart(2, '0')})`;
+            showError(`Too many failed attempts. Try again in ${minutes}m ${secs}s`);
+        }
+
+        function showError(message) {
+            loginError.textContent = message;
+            loginError.style.display = 'block';
+        }
+
+        function hideError() {
+            loginError.style.display = 'none';
+        }
+
+        // Focus password field
+        loginPasswordInput.focus();
+    </script>
+</body>
+</html>

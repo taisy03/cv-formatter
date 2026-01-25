@@ -5,3 +5,4 @@ python-docx>=1.0.0
 docxtpl>=0.16.0
 pymupdf>=1.23.0
 gunicorn>=21.0.0
+python-dotenv>=1.0.0

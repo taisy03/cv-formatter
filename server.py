@@ -1,14 +1,112 @@
-from flask import Flask, request, send_file, jsonify, send_from_directory
+from flask import Flask, request, send_file, jsonify, send_from_directory, session, redirect
 from flask_cors import CORS
+from dotenv import load_dotenv
 import pymupdf as fitz  # PyMuPDF
 import json
 import os
 import io
+import secrets
+import hashlib
+import time
+from functools import wraps
+from collections import defaultdict
+from threading import Lock
 from openai import OpenAI
 from docxtpl import DocxTemplate
 
+# Load environment variables from .env file
+load_dotenv()
+
 app = Flask(__name__, static_folder='frontend', static_url_path='')
-CORS(app)  # Enable CORS for all routes
+CORS(app, supports_credentials=True)
+
+# Secure session configuration
+app.secret_key = os.getenv('SECRET_KEY', secrets.token_hex(32))
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('FLASK_ENV') == 'production'
+app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 24 hours
+
+# Password configuration - MUST be set via environment variable
+# Generate a hash: python -c "import hashlib; print(hashlib.sha256('your_password'.encode()).hexdigest())"
+APP_PASSWORD_HASH = os.getenv('APP_PASSWORD_HASH')
+
+# ============================================
+# Rate Limiting for Brute Force Protection
+# ============================================
+# Configuration
+MAX_LOGIN_ATTEMPTS = 5  # Max attempts before lockout
+LOCKOUT_DURATION = 900  # 15 minutes lockout (in seconds)
+FAILED_LOGIN_DELAY = 2  # 2 second delay after failed login
+
+# Track failed login attempts per IP
+login_attempts = defaultdict(list)  # IP -> list of timestamps
+login_locks = defaultdict(Lock)  # IP -> lock for thread safety
+
+def get_client_ip():
+    """Get the client's IP address, accounting for proxies"""
+    # Check for forwarded IP (if behind proxy/load balancer)
+    if request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    if request.headers.get('X-Real-IP'):
+        return request.headers.get('X-Real-IP')
+    return request.remote_addr
+
+def is_ip_locked(ip):
+    """Check if an IP is currently locked out"""
+    with login_locks[ip]:
+        current_time = time.time()
+        # Remove attempts older than lockout duration
+        login_attempts[ip] = [
+            t for t in login_attempts[ip] 
+            if current_time - t < LOCKOUT_DURATION
+        ]
+        # Check if too many recent attempts
+        return len(login_attempts[ip]) >= MAX_LOGIN_ATTEMPTS
+
+def record_failed_attempt(ip):
+    """Record a failed login attempt for an IP"""
+    with login_locks[ip]:
+        login_attempts[ip].append(time.time())
+
+def clear_failed_attempts(ip):
+    """Clear failed attempts after successful login"""
+    with login_locks[ip]:
+        login_attempts[ip] = []
+
+def get_lockout_remaining(ip):
+    """Get remaining lockout time in seconds"""
+    with login_locks[ip]:
+        if not login_attempts[ip]:
+            return 0
+        oldest_attempt = min(login_attempts[ip])
+        remaining = LOCKOUT_DURATION - (time.time() - oldest_attempt)
+        return max(0, int(remaining))
+
+# ============================================
+# Authentication Functions
+# ============================================
+
+def get_password_hash():
+    """Get the password hash from environment variable"""
+    if not APP_PASSWORD_HASH:
+        raise RuntimeError("APP_PASSWORD_HASH environment variable is not set!")
+    return APP_PASSWORD_HASH
+
+def verify_password(password):
+    """Securely verify the password using constant-time comparison"""
+    provided_hash = hashlib.sha256(password.encode()).hexdigest()
+    expected_hash = get_password_hash()
+    return secrets.compare_digest(provided_hash, expected_hash)
+
+def login_required(f):
+    """Decorator to protect routes that require authentication"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
 
 # Maximum file size: 10MB
 MAX_FILE_SIZE = 10 * 1024 * 1024
@@ -212,13 +310,104 @@ def create_word_doc_bytes(data, template_path):
     return output_buffer
 
 
+# Authentication endpoints
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Handle login requests with brute force protection"""
+    client_ip = get_client_ip()
+    
+    # Check if IP is locked out
+    if is_ip_locked(client_ip):
+        remaining = get_lockout_remaining(client_ip)
+        minutes = remaining // 60
+        seconds = remaining % 60
+        print(f"SECURITY: Blocked login attempt from locked IP: {client_ip}")
+        return jsonify({
+            'error': f'Too many failed attempts. Try again in {minutes}m {seconds}s',
+            'locked': True,
+            'remaining_seconds': remaining
+        }), 429
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        password = data.get('password', '')
+        
+        if not password:
+            return jsonify({'error': 'Password is required'}), 400
+        
+        if verify_password(password):
+            # Successful login - clear failed attempts
+            clear_failed_attempts(client_ip)
+            session.permanent = True
+            session['authenticated'] = True
+            session['session_token'] = secrets.token_hex(16)
+            print(f"SECURITY: Successful login from IP: {client_ip}")
+            return jsonify({'success': True, 'message': 'Login successful'})
+        else:
+            # Failed login - record attempt and add delay
+            record_failed_attempt(client_ip)
+            attempts_left = MAX_LOGIN_ATTEMPTS - len(login_attempts[client_ip])
+            print(f"SECURITY: Failed login attempt from IP: {client_ip} ({attempts_left} attempts remaining)")
+            
+            # Add delay to slow down brute force attacks
+            time.sleep(FAILED_LOGIN_DELAY)
+            
+            if attempts_left <= 0:
+                remaining = get_lockout_remaining(client_ip)
+                return jsonify({
+                    'error': f'Too many failed attempts. Locked for {remaining // 60} minutes.',
+                    'locked': True,
+                    'remaining_seconds': remaining
+                }), 429
+            
+            return jsonify({
+                'error': f'Invalid password. {attempts_left} attempts remaining.',
+                'attempts_left': attempts_left
+            }), 401
+            
+    except Exception as e:
+        print(f"Login error: {str(e)}")
+        return jsonify({'error': 'Login failed'}), 500
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    """Handle logout requests"""
+    session.clear()
+    return jsonify({'success': True, 'message': 'Logged out successfully'})
+
+
+@app.route('/api/auth/check', methods=['GET'])
+def check_auth():
+    """Check if user is authenticated"""
+    if session.get('authenticated'):
+        return jsonify({'authenticated': True})
+    return jsonify({'authenticated': False}), 401
+
+
+@app.route('/login')
+def login_page():
+    """Serve the login page"""
+    # If already authenticated, redirect to main app
+    if session.get('authenticated'):
+        return redirect('/')
+    return send_from_directory('frontend', 'login.html')
+
+
 @app.route('/')
 def index():
-    """Serve the frontend HTML page"""
+    """Serve the frontend HTML page - PROTECTED"""
+    # Redirect to login if not authenticated
+    if not session.get('authenticated'):
+        return redirect('/login')
     return send_from_directory('frontend', 'index.html')
 
 
 @app.route('/api/process', methods=['POST'])
+@login_required
 def process_resume():
     """Process PDF resume and return formatted Word document"""
     try:
@@ -309,9 +498,13 @@ def serve_static(path):
     if path.startswith('api/'):
         return jsonify({'error': 'Not found'}), 404
     
-    # Serve CSS and JS files
-    if path in ['style.css', 'app.js']:
+    # Serve CSS and JS files (public - needed for login page styling)
+    if path in ['style.css', 'app.js', 'login.html']:
         return send_from_directory('frontend', path)
+    
+    # All other routes require authentication
+    if not session.get('authenticated'):
+        return redirect('/login')
     
     # Default to index.html for SPA routing
     return send_from_directory('frontend', 'index.html')
@@ -325,8 +518,20 @@ if __name__ == '__main__':
     if not os.path.exists(template_path):
         print(f"WARNING: Template file not found at {template_path}")
     
+    # Print security notice
+    if not APP_PASSWORD_HASH:
+        print("\n" + "="*60)
+        print("ERROR: APP_PASSWORD_HASH environment variable is not set!")
+        print("")
+        print("To set a password, run:")
+        print("  export APP_PASSWORD_HASH=$(python -c \"import hashlib; print(hashlib.sha256('YOUR_PASSWORD'.encode()).hexdigest())\")")
+        print("")
+        print("Or create a .env file with:")
+        print("  APP_PASSWORD_HASH=your_hash_here")
+        print("="*60 + "\n")
+        exit(1)
+    
     # Run Flask app
     # Set debug=False for production
     debug_mode = os.getenv('FLASK_ENV') != 'production'
     app.run(host='0.0.0.0', port=5000, debug=debug_mode)
-
